@@ -17,12 +17,12 @@ public:
 	
 	//todo: bool can_i_send_msg();
 
-	bool send_message_to(const char * ip, int port, const char * msg);	//ascii, 0 terminated string.
+	bool send_message_to(const char * ip, int port, const char * buffer_sent);	//ascii, 0 terminated string.
 
 	//todo: bool send_message_to(const char * ip, int port, void * buffer, int length);	
 
 
-	//todo: void remove_neighbour(const char * ip, int port);	//Como manejar el cierre de los sockets con operaciones pendientes?
+	void remove_neighbour(const char * ip, int port);	//Como manejar el cierre de los sockets con operaciones pendientes?
 	
 	bool is_neighbour(const char * ip, int port);
 
@@ -65,7 +65,8 @@ private:
 	// Handler for when a message is sent after a call to async_send(...).
 	void handle_message_sent(const boost::system::error_code& error, 
 								std::size_t bytes_transferred,
-								void * buffer);
+								void * buffer, 
+								boost::asio::ip::tcp::socket * socket);
 
 	// Handler for when a message is received after a call to async_receive(...). Calls
 	// receive_message_from(...) with the same socket after its done.
@@ -79,10 +80,18 @@ private:
 
 	std::string create_map_key(const char * ip, int port);
 
+	std::string create_map_key(boost::asio::ip::tcp::endpoint endpoint);
+
 	std::map<std::string, boost::asio::ip::tcp::socket * > neighbourhood;	// tcp::socket cant be copied, 
 																			// therefore socket * is used 
 																			// and sockets are created in 
 																			// heap
+
+	void remove_connection(const char * ip, unsigned int port);
+
+	void remove_connection(boost::asio::ip::tcp::endpoint endpoint);
+
+	void remove_connection(std::string map_key);
 
 	/***********/
 
@@ -91,9 +100,10 @@ private:
 						// ie. after an async_send(), it has to wait until its handler is called to be able 
 						// to call async_send() again without errors.
 
-	std::string msg;	// Contains the last message sent. It is crucial that the buffer that contains the 
-						// message sent by async_send is not modified or destroyed until after the handler is 
-						// called. In this implementation, this variable acts as the buffer.
+	std::vector<unsigned char> buffer_sent;	// Contains the last message sent. It is crucial that the buffer that 
+									// contains the message sent by async_send is not modified or destroyed 
+									// until after the handler is called. In this implementation, this 
+									// variable acts as the buffer.
 
 	const char * who_am_i;
 
