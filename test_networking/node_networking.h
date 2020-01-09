@@ -19,7 +19,7 @@ public:
 
 	bool send_message_to(const char * ip, int port, const char * buffer_sent);	//ascii, 0 terminated string.
 
-	//todo: bool send_message_to(const char * ip, int port, void * buffer, int length);	
+	bool send_message_to(const char * ip, int port, void * buffer, int length);	
 
 
 	void remove_neighbour(const char * ip, int port);	//Como manejar el cierre de los sockets con operaciones pendientes?
@@ -56,8 +56,13 @@ private:
 
 	/***** SENDING / RECEIVING MESSAGES FUNCTIONS *****/
 
-	// Starts sending message through the connection saved in the socket. 
+	// Starts sending message through the connection saved in the socket.
+	// message: C-string, '\0' terminated
 	void send_message_to(boost::asio::ip::tcp::socket * socket, const char * message);
+
+	// Starts sending message through the connection saved in the socket.
+	// buffer: byte buffer, NOT '\0' terminated
+	void send_message_to(boost::asio::ip::tcp::socket * socket, void * buffer, int length);
 
 	// Starts waiting for messages through the connection saved in the socket.
 	void receive_message_from(boost::asio::ip::tcp::socket * socket);
@@ -78,9 +83,9 @@ private:
 
 	/****** STORING ACTIVE CONNECTIONS *****/
 
-	std::string create_map_key(const char * ip, int port);
+	std::string endpoint_to_string(const char * ip, int port);
 
-	std::string create_map_key(boost::asio::ip::tcp::endpoint endpoint);
+	std::string endpoint_to_string(boost::asio::ip::tcp::endpoint endpoint);
 
 	std::map<std::string, boost::asio::ip::tcp::socket * > neighbourhood;	// tcp::socket cant be copied, 
 																			// therefore socket * is used 
