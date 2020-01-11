@@ -3,7 +3,10 @@
 #include <boost\asio.hpp>
 #include <string>
 
-typedef std::pair<std::string, boost::asio::ip::tcp::socket * > map_entry_t;
+// forward declaration that allows less verbose syntax ("connection_t" instead of "struct connection_t")
+typedef struct connection connection;
+
+typedef std::pair<std::string, connection * > map_entry_t;
 
 class node_networking
 {
@@ -21,8 +24,7 @@ public:
 
 	bool send_message_to(const char * ip, int port, void * buffer, int length);	
 
-
-	void remove_neighbour(const char * ip, int port);	//Como manejar el cierre de los sockets con operaciones pendientes?
+	void remove_neighbour(const char * ip, int port);
 	
 	bool is_neighbour(const char * ip, int port);
 
@@ -42,73 +44,75 @@ private:
 	// Is equivalent to handle_new_connection(...), it only exists for symmetry with
 	// handle_new_connection_by_accept(...).
 	void handle_new_connection_by_connect(const boost::system::error_code & error,
-											boost::asio::ip::tcp::socket * socket);
+											connection * conn);
 
 	// Handler for when a new connection is established after a call to async_connect(...).
 	// Is equivalent to calling handle_new_connection(...) follwed by async_accept(...).
 	void handle_new_connection_by_accept(const boost::system::error_code & error,
-											boost::asio::ip::tcp::socket * socket);
+											connection * conn);
 
-	// Stores the socket and starts listening for incoming messages
+	// Stores the connection and starts listening for incoming messages
 	void handle_new_connection(const boost::system::error_code & error, 
-								boost::asio::ip::tcp::socket * socket);
+								connection * conn);
 
 
 	/***** SENDING / RECEIVING MESSAGES FUNCTIONS *****/
 
-	// Starts sending message through the connection saved in the socket.
+	// Starts sending message through the specified connection.
 	// message: C-string, '\0' terminated
-	void send_message_to(boost::asio::ip::tcp::socket * socket, const char * message);
+	void send_message_to(connection * conn, const char * message);
 
-	// Starts sending message through the connection saved in the socket.
+	// Starts sending message through the specified connection.
 	// buffer: byte buffer, NOT '\0' terminated
-	void send_message_to(boost::asio::ip::tcp::socket * socket, void * buffer, int length);
+	void send_message_to(connection * conn, void * buffer, int length);
 
-	// Starts waiting for messages through the connection saved in the socket.
-	void receive_message_from(boost::asio::ip::tcp::socket * socket);
+	// Starts waiting for messages through the specified connection..
+	void receive_message_from(connection * conn);
 
 	// Handler for when a message is sent after a call to async_send(...).
 	void handle_message_sent(const boost::system::error_code& error, 
 								std::size_t bytes_transferred,
-								void * buffer, 
-								boost::asio::ip::tcp::socket * socket);
+								connection * conn);
 
 	// Handler for when a message is received after a call to async_receive(...). Calls
 	// receive_message_from(...) with the same socket after its done.
 	void handle_message_received(const boost::system::error_code& error,
 									std::size_t bytes_transferred,
-									void * buffer,
-									boost::asio::ip::tcp::socket * socket);
+									connection * conn);
 	
 
 	/****** STORING ACTIVE CONNECTIONS *****/
 
-	std::string endpoint_to_string(const char * ip, int port);
+	// Stores all active connections.
+	// Key format: std::string containing ip + ":" + port. Example: std::string("127.0.0.1:12345")
+	std::map<std::string, connection * > neighbourhood;
 
-	std::string endpoint_to_string(boost::asio::ip::tcp::endpoint endpoint);
-
-	std::map<std::string, boost::asio::ip::tcp::socket * > neighbourhood;	// tcp::socket cant be copied, 
-																			// therefore socket * is used 
-																			// and sockets are created in 
-																			// heap
-
+	// Gracefully waits for all async operations to end and closes the connection.
 	void remove_connection(const char * ip, unsigned int port);
 
+	// Gracefully waits for all async operations to end and closes the connection.
 	void remove_connection(boost::asio::ip::tcp::endpoint endpoint);
-
+	
+	// Gracefully waits for all async operations to end and closes the connection.
 	void remove_connection(std::string map_key);
 
 	/***********/
 
-	//todo: bool sending_msg;	// true if async_send() was called but the handler hasnt been called, false otherwise
-						// For simplicity, this implementations only allows one message to be sent at a time, 
-						// ie. after an async_send(), it has to wait until its handler is called to be able 
-						// to call async_send() again without errors.
+	// Resulting std::string works as key for the std::map neighbourhood
+	std::string endpoint_to_string(const char * ip, int port);
 
-	std::vector<unsigned char> buffer_sent;	// Contains the last message sent. It is crucial that the buffer that 
-									// contains the message sent by async_send is not modified or destroyed 
-									// until after the handler is called. In this implementation, this 
-									// variable acts as the buffer.
+	// Resulting std::string works as key for the std::map neighbourhood
+	std::string endpoint_to_string(boost::asio::ip::tcp::endpoint endpoint);
+
+	//todo: bool sending_msg;	// true if async_send() was called but the handler hasnt been called, false otherwise
+								// For simplicity, this implementations only allows one message to be sent at a time, 
+								// ie. after an async_send(), it has to wait until its handler is called to be able 
+								// to call async_send() again without errors.
+
+	//std::vector<unsigned char> buffer_sent;	// Contains the last message sent. It is crucial that the buffer that 
+											// contains the message sent by async_send is not modified or destroyed 
+											// until after the handler is called. In this implementation, this 
+											// variable acts as the buffer.
 
 	const char * who_am_i;
 

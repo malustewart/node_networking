@@ -3,15 +3,34 @@
 #include <iostream>
 #include <boost/bind.hpp>
 
+#define RECEIVE_BUFFER_LEN 200
 
 using boost::asio::ip::tcp;
 using boost::asio::ip::address;
 
 
-//todo: socket * should be smart pointers
+//todo: connection * should be smart pointers
 
-// todo: should actually use more than one buffer to avoid overwriting
-unsigned char incoming_buffer[200];
+
+typedef struct connection
+{
+	connection(boost::asio::ip::tcp::socket * _socket)
+		: socket(_socket), send_pending(false) {
+		receive_buffer.reserve(RECEIVE_BUFFER_LEN);
+	}
+	~connection() { 
+		if (socket->is_open()) {
+			// Gracefully end both send and receive operations
+			socket->shutdown(boost::asio::ip::tcp::socket::shutdown_both); //todo: throws exception when its called before a connection is established.
+		}
+		delete socket; // Calls close() method
+	}
+
+	boost::asio::ip::tcp::socket * socket;
+	std::vector<unsigned char> send_buffer;
+	std::vector<unsigned char> receive_buffer;
+	bool send_pending;
+} connection;
 
 node_networking::node_networking(boost::asio::io_context& io_context_, int port, const char * who_am_i_)
 	: io_context(io_context_),
@@ -33,6 +52,9 @@ node_networking::node_networking(boost::asio::io_context & io_context, int port)
 
 node_networking::~node_networking()
 {
+	for (auto map_entry : neighbourhood) {
+		delete map_entry.second;
+	}
 }
 
 void node_networking::connect_to(const char * ip, int port)
@@ -47,7 +69,7 @@ bool node_networking::send_message_to(const char * ip, int port, const char * _m
 	{
 		return false;
 	}
-	send_message_to((*neighbourhood.find(endpoint_to_string(ip, port))).second, _msg);
+	send_message_to(neighbourhood.find(endpoint_to_string(ip, port))->second, _msg);
 	return true;
 }
 
@@ -63,127 +85,132 @@ bool node_networking::is_neighbour(const char * ip, int port)
 
 void node_networking::accept_incoming_connections()
 {
-	// Socket to manage connection with the next neighbour that tries to connect 
+	// Socket to manage communication with the next neighbour that tries to connect 
 	// to the endpoint given to the acceptor
 	auto socket = new tcp::socket(io_context);
+
+	// Contains socket and other relevant elements of the connection
+	connection * conn = new connection(socket);
+	conn->socket = socket;
 
 	acceptor.async_accept(
 		*socket,
 		boost::bind(&node_networking::handle_new_connection_by_accept,
 					this,
 					boost::asio::placeholders::error,
-					socket)
+					conn)
 	);
 }
 
 void node_networking::connect_to(boost::asio::ip::tcp::endpoint remote_endpoint)
 {
 	auto socket = new tcp::socket(io_context);
-	(*socket).open(tcp::v4());
-	(*socket).set_option(boost::asio::socket_base::reuse_address(true));	// If not set, bind fails because Acceptor is already binded to same endpoint.
-	(*socket).bind(local_endpoint);	// Indicate which port the connection comes from. May fail is reuse_address option hasnt been set.
-	(*socket).async_connect(
+	socket->open(tcp::v4());
+	socket->set_option(boost::asio::socket_base::reuse_address(true));	// If not set, bind fails because Acceptor is already binded to same endpoint.
+	socket->bind(local_endpoint);	// Indicate which port the connection comes from. May fail if reuse_address option hasnt been set.
+	
+	connection * conn = new connection(socket);
+	
+	socket->async_connect(
 		remote_endpoint,
 		boost::bind(&node_networking::handle_new_connection,
 			this,
 			boost::asio::placeholders::error,
-			socket)
+			conn)
 	);
 }
 
-void node_networking::handle_new_connection_by_connect(const boost::system::error_code & error, boost::asio::ip::tcp::socket * socket)
+void node_networking::handle_new_connection_by_connect(const boost::system::error_code & error, 
+														connection * conn)
 {
-	handle_new_connection(error, socket);
+	handle_new_connection(error, conn);
 }
 
-void node_networking::handle_new_connection_by_accept(const boost::system::error_code & error, boost::asio::ip::tcp::socket * socket)
+void node_networking::handle_new_connection_by_accept(const boost::system::error_code & error, 
+														connection * conn)
 {
-	handle_new_connection(error, socket);
+	handle_new_connection(error, conn);
 
 	// Wait for new connections
 	this->accept_incoming_connections();
 }
 
 void node_networking::handle_new_connection(const boost::system::error_code & error,
-												tcp::socket * socket)
+											connection * conn)
 {
 	if (!error) {
 		// If connection is established:
-		auto remote_endpoint = (*socket).remote_endpoint();	// Neighbours endpoint. Holds their IP address and port
+		auto remote_endpoint = conn->socket->remote_endpoint();	// Neighbours endpoint. Holds their IP address and port
 		std::cout << " * "<< who_am_i << " connected with " << endpoint_to_string(remote_endpoint) << std::endl;
 
-		// Store active socket
+		// Store active connection
 		neighbourhood.insert(map_entry_t(
 			endpoint_to_string(remote_endpoint),
-			socket));
+			conn));
 
 		// Listen for incoming messages
-		receive_message_from(socket);
+		receive_message_from(conn);
 		
 	} else {
-		// If connection cant be made, delete socket
+		// If connection cant be made, delete connection
 		std::cerr << error.message() << std::endl;
-		delete socket;
+		delete conn;
 	}
 }
 
-void node_networking::send_message_to(boost::asio::ip::tcp::socket * socket,
-	const char * message)
+void node_networking::send_message_to(connection * conn, const char * message)
 {
-	send_message_to(socket, (void *)message, strlen(message));
+	send_message_to(conn, (void *)message, strlen(message));
 }
 
-void node_networking::send_message_to(boost::asio::ip::tcp::socket * socket, void * _buffer, int length)
+void node_networking::send_message_to(connection * conn, void * _buffer, int length)
 {
 	unsigned char * buffer = (unsigned char *)_buffer;
-	buffer_sent.clear();
+	conn->send_buffer.clear();
 	for (int i = 0; i < length; i++)
 	{
-		buffer_sent.push_back(*buffer++);
+		conn->send_buffer.push_back(*buffer++);
 	}
 	// Important: the lifetime of the buffer that contains the 
 	// message must last at least until the completion handler 
 	// for async_read(...) is called, which is NEVER before the 
 	// end of this function.
 
-	socket->async_send(
-		boost::asio::buffer((const void *)buffer_sent.data(), length),
+	conn->socket->async_send(
+		boost::asio::buffer((const void *)conn->send_buffer.data(), length),
 		boost::bind(&node_networking::handle_message_sent,
 			this,
 			boost::asio::placeholders::error,
 			boost::asio::placeholders::bytes_transferred,
-			(void *)buffer_sent.data(),
-			socket)
+			conn)
 	);
 }
 
-void node_networking::receive_message_from(boost::asio::ip::tcp::socket * socket)
+void node_networking::receive_message_from(connection * conn)
 {
 	// Listen for messages
-	(*socket).async_receive(
-		boost::asio::buffer(incoming_buffer, 200),
+	conn->socket->async_receive(
+		boost::asio::buffer(conn->receive_buffer.data(), RECEIVE_BUFFER_LEN),
 		boost::bind(&node_networking::handle_message_received,
 			this,
 			boost::asio::placeholders::error,
 			boost::asio::placeholders::bytes_transferred,
-			incoming_buffer,
-			socket)
+			conn)
 	);
 }
 
 void node_networking::handle_message_sent(const boost::system::error_code & error,
 											std::size_t bytes_transferred,
-											void * buffer,
-											boost::asio::ip::tcp::socket * socket)
+											connection * conn)
 {
 	if (!error) {
 		std::cout << " * " << who_am_i << " sent: \"";
 		for (unsigned int i = 0; i < bytes_transferred; i++) {
-			std::cout << ((unsigned char *)buffer)[i];
+			std::cout << ((unsigned char *)conn->send_buffer.data())[i];
 		}
 		std::cout << "\" (" << bytes_transferred << " bytes)"<< std::endl;
 	} else {
-		tcp::endpoint remote_endpoint = (*socket).remote_endpoint();
+		tcp::endpoint remote_endpoint = conn->socket->remote_endpoint();
 		std::cerr << " * Error sending message from " << who_am_i << " to "  << \
 			endpoint_to_string(remote_endpoint) << " : " << error.message() << std::endl;
 	}
@@ -191,8 +218,7 @@ void node_networking::handle_message_sent(const boost::system::error_code & erro
 
 void node_networking::handle_message_received(const boost::system::error_code & error, 
 												std::size_t bytes_transferred,
-												void * buffer,
-												boost::asio::ip::tcp::socket * socket)
+												connection * conn)
 {
 	switch (error.value())
 	{
@@ -200,19 +226,15 @@ void node_networking::handle_message_received(const boost::system::error_code & 
 		{
 			std::cout << " * " << who_am_i << " received: \"";
 			for (unsigned int i = 0; i < bytes_transferred; i++) {
-				std::cout << ((unsigned char *)buffer)[i];
+				std::cout << ((unsigned char *)conn->receive_buffer.data())[i];
 			}
 			std::cout << "\" (" << bytes_transferred << " bytes)" << std::endl;
-			receive_message_from(socket);			
+			receive_message_from(conn);			
 			break;
 		}
 		case boost::asio::error::eof:
 		{
-			//tcp::endpoint remote_endpoint = (*socket).remote_endpoint();
-			//std::cout << " * " << endpoint_to_string(remote_endpoint) << " disconnected from "\
-			//	<< who_am_i << std::endl;
-			////todo: delete socket;
-			remove_connection((*socket).remote_endpoint());
+			remove_connection(conn->socket->remote_endpoint());
 			break;
 		}
 		case boost::asio::error::operation_aborted:
@@ -220,9 +242,9 @@ void node_networking::handle_message_received(const boost::system::error_code & 
 			break;
 		}
 		default:
-			tcp::endpoint remote_endpoint = (*socket).remote_endpoint();
-			std::cerr << " * who_ Unexpeted error receiving message from " << endpoint_to_string(remote_endpoint)\
-				<< " to " << who_am_i << " : " << error.message() << std::endl;
+			// Depending on the error, the remote endpoint of the socket cant be accessed.
+			std::cerr << " * Unexpected error receiving message " \
+				<< " for " << who_am_i << " : " << error.message() << std::endl;
 
 	}
 }
@@ -250,17 +272,15 @@ void node_networking::remove_connection(boost::asio::ip::tcp::endpoint endpoint)
 
 void node_networking::remove_connection(std::string map_key)
 {
-	auto connection = neighbourhood.find(map_key);
+	auto it = neighbourhood.find(map_key);
 	// If the connection to that endpoint doesnt exist, return.
-	if (connection == neighbourhood.end()) 
+	if (it == neighbourhood.end()) 
 		return;
 	
-	auto socket = connection->second;
-	auto remote_endpoint = socket->remote_endpoint();
+	auto conn = it->second;
+	auto remote_endpoint = conn->socket->remote_endpoint();
 
-	// Gracefully end both send and receive operations
-	socket->shutdown(boost::asio::ip::tcp::socket::shutdown_both);
-	delete socket;	// Calls close() method
+	delete conn;
 	
 	neighbourhood.erase(map_key);
 
