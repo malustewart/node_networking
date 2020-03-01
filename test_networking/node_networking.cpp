@@ -2,6 +2,9 @@
 
 #include <iostream>
 #include <boost/bind.hpp>
+#include <boost/shared_ptr.hpp>
+#include <boost/make_shared.hpp>
+#include <boost/enable_shared_from_this.hpp>
 
 #define RECEIVE_BUFFER_LEN 200
 
@@ -12,7 +15,8 @@ using boost::asio::ip::address;
 //todo: connection * should be smart pointers
 
 
-typedef struct connection
+
+typedef struct connection : boost::enable_shared_from_this<connection>
 {
 	connection(boost::asio::ip::tcp::socket * _socket)
 		: socket(_socket), send_pending(false) {
@@ -53,7 +57,7 @@ node_networking::node_networking(boost::asio::io_context & io_context, int port)
 node_networking::~node_networking()
 {
 	for (auto map_entry : neighbourhood) {
-		delete map_entry.second;
+		map_entry.second.reset();
 	}
 }
 
@@ -90,7 +94,7 @@ void node_networking::accept_incoming_connections()
 	auto socket = new tcp::socket(io_context);
 
 	// Contains socket and other relevant elements of the connection
-	connection * conn = new connection(socket);
+	connection_ptr conn(new connection(socket));
 	conn->socket = socket;
 
 	acceptor.async_accept(
@@ -109,7 +113,7 @@ void node_networking::connect_to(boost::asio::ip::tcp::endpoint remote_endpoint)
 	socket->set_option(boost::asio::socket_base::reuse_address(true));	// If not set, bind fails because Acceptor is already binded to same endpoint.
 	socket->bind(local_endpoint);	// Indicate which port the connection comes from. May fail if reuse_address option hasnt been set.
 	
-	connection * conn = new connection(socket);
+	connection_ptr conn(new connection(socket));
 	
 	socket->async_connect(
 		remote_endpoint,
@@ -121,13 +125,13 @@ void node_networking::connect_to(boost::asio::ip::tcp::endpoint remote_endpoint)
 }
 
 void node_networking::handle_new_connection_by_connect(const boost::system::error_code & error, 
-														connection * conn)
+														connection_ptr conn)
 {
 	handle_new_connection(error, conn);
 }
 
 void node_networking::handle_new_connection_by_accept(const boost::system::error_code & error, 
-														connection * conn)
+														connection_ptr conn)
 {
 	handle_new_connection(error, conn);
 
@@ -136,7 +140,7 @@ void node_networking::handle_new_connection_by_accept(const boost::system::error
 }
 
 void node_networking::handle_new_connection(const boost::system::error_code & error,
-											connection * conn)
+											connection_ptr conn)
 {
 	if (!error) {
 		// If connection is established:
@@ -146,7 +150,7 @@ void node_networking::handle_new_connection(const boost::system::error_code & er
 		// Store active connection
 		neighbourhood.insert(map_entry_t(
 			endpoint_to_string(remote_endpoint),
-			conn));
+			boost::shared_ptr<connection>(conn)));
 
 		// Listen for incoming messages
 		receive_message_from(conn);
@@ -154,16 +158,16 @@ void node_networking::handle_new_connection(const boost::system::error_code & er
 	} else {
 		// If connection cant be made, delete connection
 		std::cerr << error.message() << std::endl;
-		delete conn;
+		conn.reset();
 	}
 }
 
-void node_networking::send_message_to(connection * conn, const char * message)
+void node_networking::send_message_to(connection_ptr conn, const char * message)
 {
 	send_message_to(conn, (void *)message, strlen(message));
 }
 
-void node_networking::send_message_to(connection * conn, void * _buffer, int length)
+void node_networking::send_message_to(connection_ptr conn, void * _buffer, int length)
 {
 	unsigned char * buffer = (unsigned char *)_buffer;
 	conn->send_buffer.clear();
@@ -186,7 +190,7 @@ void node_networking::send_message_to(connection * conn, void * _buffer, int len
 	);
 }
 
-void node_networking::receive_message_from(connection * conn)
+void node_networking::receive_message_from(connection_ptr conn)
 {
 	// Listen for messages
 	conn->socket->async_receive(
@@ -201,7 +205,7 @@ void node_networking::receive_message_from(connection * conn)
 
 void node_networking::handle_message_sent(const boost::system::error_code & error,
 											std::size_t bytes_transferred,
-											connection * conn)
+											connection_ptr conn)
 {
 	if (!error) {
 		std::cout << " * " << who_am_i << " sent: \"";
@@ -218,7 +222,7 @@ void node_networking::handle_message_sent(const boost::system::error_code & erro
 
 void node_networking::handle_message_received(const boost::system::error_code & error, 
 												std::size_t bytes_transferred,
-												connection * conn)
+												connection_ptr conn)
 {
 	switch (error.value())
 	{
@@ -280,7 +284,7 @@ void node_networking::remove_connection(std::string map_key)
 	auto conn = it->second;
 	auto remote_endpoint = conn->socket->remote_endpoint();
 
-	delete conn;
+	conn.reset();
 	
 	neighbourhood.erase(map_key);
 
