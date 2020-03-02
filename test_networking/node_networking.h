@@ -3,7 +3,7 @@
 #include <boost\asio.hpp>
 #include <string>
 
-// forward declaration that allows less verbose syntax ("connection_t" instead of "struct connection_t")
+// forward declaration that allows less verbose syntax ("connection" instead of "struct connection")
 typedef struct connection connection;
 
 typedef boost::shared_ptr<connection> connection_ptr;
@@ -105,16 +105,6 @@ private:
 
 	// Resulting std::string works as key for the std::map neighbourhood
 	std::string endpoint_to_string(boost::asio::ip::tcp::endpoint endpoint);
-
-	//todo: bool sending_msg;	// true if async_send() was called but the handler hasnt been called, false otherwise
-								// For simplicity, this implementations only allows one message to be sent at a time, 
-								// ie. after an async_send(), it has to wait until its handler is called to be able 
-								// to call async_send() again without errors.
-
-	//std::vector<unsigned char> buffer_sent;	// Contains the last message sent. It is crucial that the buffer that 
-											// contains the message sent by async_send is not modified or destroyed 
-											// until after the handler is called. In this implementation, this 
-											// variable acts as the buffer.
 
 	const char * who_am_i;
 
